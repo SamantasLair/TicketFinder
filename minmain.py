@@ -12,11 +12,11 @@ from datetime import datetime
 # =============================================================================
 # Format log menggunakan simbol untuk efisiensi pembacaan visual:
 # [I] INFO      : Operasi standar sistem.
-# [+] MATCH     : Data sesuai kriteria ditemukan.
-# [-] SKIP      : Data/Lembar kerja diabaikan.
-# [!] ERROR     : Kesalahan runtime atau pengecualian.
-# [D] DUPLICATE : Redundansi data terdeteksi.
-# [>] PROCESS   : Memulai sub-rutin baru.
+# [+] COCOK     : Data sesuai kriteria ditemukan.
+# [-] ABAIKAN   : Data/Lembar kerja diabaikan.
+# [!] GALAT     : Kesalahan runtime atau pengecualian.
+# [D] DUPLIKASI : Redundansi data terdeteksi.
+# [>] PROSES    : Memulai sub-rutin baru.
 
 logging.basicConfig(
     filename='debug_log.txt',
@@ -42,7 +42,7 @@ class BRIProSystem:
         3. Memanggil metode konstruksi antarmuka grafis (GUI).
         """
         self.root = root
-        self.root.title("Sistem Rekapitulasi Operasional")
+        self.root.title("Sistem Rekapitulasi Operasional (Pencarian Kolom Dinamis)")
         self.root.geometry("1350x850") 
         self.root.configure(bg="#F4F5F7")
 
@@ -106,7 +106,7 @@ class BRIProSystem:
         
         info_frame = tk.Frame(header, bg=self.c_primary)
         info_frame.pack(side="right", padx=25, pady=15)
-        tk.Label(info_frame, text="Versi Stabil | Format Tanggal DD/MM/YYYY", 
+        tk.Label(info_frame, text="Versi: Ekstraksi Dinamis (Unit Kerja & Kanca)", 
                  bg=self.c_primary, fg="#BDC3C7", font=("Segoe UI", 10)).pack(anchor="e")
 
         # --- Bagian Kontrol Input ---
@@ -174,7 +174,8 @@ class BRIProSystem:
         sy = ttk.Scrollbar(table_frame, orient="vertical")
         sx = ttk.Scrollbar(table_frame, orient="horizontal")
         
-        self.cols = ["Nomor Kasus", "Tipe Kasus", "Deskripsi", "Tanggal", "Unit Kerja", "Sumber Berkas"]
+        # PEMBARUAN KOLOM: Unit Kerja Pelaksana & Kanca
+        self.cols = ["Nomor Kasus", "Tipe Kasus", "Deskripsi", "Tanggal", "Unit Kerja Pelaksana", "Kanca", "Sumber Berkas"]
         self.tree = ttk.Treeview(table_frame, columns=self.cols, show="headings", 
                                  yscrollcommand=sy.set, xscrollcommand=sx.set)
         
@@ -187,9 +188,11 @@ class BRIProSystem:
         for c in self.cols:
             self.tree.heading(c, text=c, anchor="w")
             if c == "Sumber Berkas":
-                self.tree.column(c, width=250)
-            else:
+                self.tree.column(c, width=200)
+            elif c == "Unit Kerja Pelaksana" or c == "Kanca":
                 self.tree.column(c, width=180)
+            else:
+                self.tree.column(c, width=150)
 
         self.tree.bind("<Control-c>", self.copy_tree)
 
@@ -200,12 +203,7 @@ class BRIProSystem:
     def normalize_val(self, val):
         """
         Normalisasi Nilai Sel (Data Normalization Logic).
-        
-        Menangani berbagai tipe data masukan dari Excel:
-        1. datetime -> String terformat 'DD/MM/YYYY'.
-        2. float (x.0) -> Integer String.
-        3. None -> String kosong.
-        4. String -> Trim whitespace.
+        Mengonversi tipe data Excel menjadi String bersih untuk konsistensi.
         """
         if val is None:
             return ""
@@ -223,10 +221,21 @@ class BRIProSystem:
         
         return str(val).strip()
 
+    def get_column_index(self, header_row, keyword):
+        """
+        Pencarian Indeks Kolom Berdasarkan Nama Header (Case-Insensitive).
+        Mengembalikan indeks kolom (0-based) jika ditemukan, atau -1 jika tidak.
+        """
+        keyword_lower = keyword.lower()
+        for idx, cell_val in enumerate(header_row):
+            if cell_val and keyword_lower in str(cell_val).lower():
+                return idx
+        return -1
+
     def clean_error_msg(self, error_obj):
         """
-        Pembersihan Pesan Galat (Error Message Sanitization).
-        Mengubah pesan teknis Python/COM menjadi bahasa yang mudah dipahami operator.
+        Sanitasi Pesan Galat.
+        Mengubah pesan teknis menjadi informasi yang mudah dipahami.
         """
         raw_msg = str(error_obj)
         if "ShowDetail" in raw_msg:
@@ -247,7 +256,6 @@ class BRIProSystem:
     def start_thread_process(self):
         """
         Inisiasi Proses Latar Belakang (Thread Initialization).
-        Validasi input pengguna dan pemanggilan Thread pekerja.
         """
         row_kw = self.entry_row.get()
         col_kw = self.entry_col.get()
@@ -278,7 +286,6 @@ class BRIProSystem:
     def worker_process(self, file_paths, row_kw, col_kw, filter_code):
         """
         Logika Utama Pekerja (Worker Main Logic).
-        Iterasi berkas dan manajemen instansi aplikasi Excel.
         """
         app = None
         try:
@@ -317,13 +324,7 @@ class BRIProSystem:
     def process_single_file(self, app, path, row_regex, col_keyword, filter_code):
         """
         Pemrosesan Berkas Tunggal.
-        
-        Alur Logika:
-        1. Buka Workbook.
-        2. Iterasi Lembar Kerja (Sheet).
-        3. Pindai Koordinat (Metode Heuristik Kiri-Atas).
-        4. Eksekusi Drill Down (ShowDetail).
-        5. Ekstraksi data dari lembar kerja baru.
+        Meliputi navigasi sheet, pencarian koordinat, drill-down, dan ekstraksi data dinamis.
         """
         wb = app.books.open(path)
         data_found = False
@@ -336,7 +337,7 @@ class BRIProSystem:
                     continue
 
                 try:
-                    # Pengambilan Data Mentah (List of Lists)
+                    # Pengambilan Data Mentah
                     used_range = sheet.used_range
                     data_val = used_range.value 
                     
@@ -415,37 +416,55 @@ class BRIProSystem:
 
     def extract_data_manual(self, raw_data, filename, filter_code):
         """
-        Logika Ekstraksi Data Manual.
-        
-        Melakukan penyaringan baris berdasarkan Regex Kode, normalisasi tanggal,
-        dan pengecekan duplikasi global.
+        Logika Ekstraksi Data Manual dengan Pencarian Kolom Dinamis.
+        Mencari indeks kolom 'Unit Kerja Pelaksana' dan 'Kanca' secara otomatis.
         """
         if not raw_data or len(raw_data) < 2:
             logging.warning("[-] Data hasil ekstraksi kosong atau hanya header.")
             return
 
-        data_rows = raw_data[1:] # Lewati Baris Header
+        header_row = raw_data[0]
+        data_rows = raw_data[1:]
+        
+        # PENCARIAN INDEKS KOLOM DINAMIS
+        # Mencari kolom berdasarkan kata kunci header
+        idx_uker = self.get_column_index(header_row, "Unit Kerja Pelaksana")
+        idx_kanca = self.get_column_index(header_row, "Kanca")
+        
+        # Fallback jika kolom Kanca tidak ditemukan, coba "Branch" atau "Cabang" (Opsional)
+        if idx_kanca == -1:
+             idx_kanca = self.get_column_index(header_row, "Cabang")
+
+        logging.info(f"[I] Pemetaan Kolom: Unit Kerja={idx_uker}, Kanca={idx_kanca}")
+
         regex_pattern = re.compile(filter_code, re.IGNORECASE)
         count_found = 0
 
         for row in data_rows:
-            # Penyesuaian panjang kolom (Padding)
-            if len(row) < 19:
-                row = row + [None] * (19 - len(row))
+            # Pastikan baris memiliki cukup kolom untuk indeks yang dicari
+            max_idx = max(1, 4, 18, idx_uker, idx_kanca) # 18 adalah indeks lama (S), kita pakai sebagai batas aman
+            if len(row) <= max_idx:
+                row = row + [None] * (max_idx - len(row) + 1)
 
-            # Ambil Kode (Indeks 1 / Kolom B)
+            # Ambil Kode (Asumsi Kolom B / Indeks 1 adalah Tipe Kasus/Kode)
             raw_code = row[1]
             clean_code = self.normalize_val(raw_code)
             
             # Pencocokan Pola (Regex Match)
             if regex_pattern.search(clean_code):
                 
-                # Normalisasi Bidang Data
+                # Normalisasi Bidang Data Dasar
                 val_a = self.normalize_val(row[0])  # No Kasus
                 val_b = clean_code                  # Tipe Kasus
                 val_d = self.normalize_val(row[3])  # Deskripsi
-                val_e = self.normalize_val(row[4])  # Tanggal (Akan diformat DD/MM/YYYY)
-                val_s = self.normalize_val(row[18]) # Unit Kerja
+                val_e = self.normalize_val(row[4])  # Tanggal
+                
+                # Ekstraksi Dinamis untuk Unit Kerja Pelaksana
+                # Jika kolom ditemukan gunakan nilainya, jika tidak kosongkan
+                val_uker = self.normalize_val(row[idx_uker]) if idx_uker != -1 else ""
+                
+                # Ekstraksi Dinamis untuk Kanca
+                val_kanca = self.normalize_val(row[idx_kanca]) if idx_kanca != -1 else ""
                 
                 # Cek Duplikasi Global
                 unique_key = (val_a, val_b)
@@ -455,9 +474,9 @@ class BRIProSystem:
                     logging.info(f"[D] DUPLIKASI: {val_a}. Sumber Asal: {prev_file}. Mengabaikan.")
                     continue 
                 
-                # Simpan Data Valid
+                # Simpan Data Valid: [... , Unit Kerja, Kanca, Sumber]
                 self.seen_cache[unique_key] = filename
-                self.master_data.append([val_a, val_b, val_d, val_e, val_s, filename])
+                self.master_data.append([val_a, val_b, val_d, val_e, val_uker, val_kanca, filename])
                 count_found += 1
 
         logging.info(f"[I] Ekstraksi {count_found} baris valid dari {filename}")
@@ -507,7 +526,7 @@ class BRIProSystem:
         self.btn_export.config(state="disabled")
         self.lbl_status.config(text="Status: Siap (Reset Selesai)")
         self.progress_bar["value"] = 0
-        messagebox.showinfo("Reset", "Memori data dan cache duplikasi telah dikosongkan.")
+        messagebox.showinfo("Atur Ulang", "Memori data dan cache duplikasi telah dikosongkan.")
 
     def show_error_window_gui(self):
         top = tk.Toplevel(self.root)
@@ -553,7 +572,6 @@ class BRIProSystem:
         if not file_path: return
         
         try:
-            # Menggunakan xlwings untuk ekspor (Menghindari ketergantungan Pandas yang berat)
             app = xw.App(visible=False)
             wb = app.books.add()
             sheet = wb.sheets[0]
