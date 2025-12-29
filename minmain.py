@@ -42,7 +42,7 @@ class BRIProSystem:
         3. Memanggil metode konstruksi antarmuka grafis (GUI).
         """
         self.root = root
-        self.root.title("Sistem Rekapitulasi Operasional (Pencarian Kolom Dinamis)")
+        self.root.title("Sistem Rekapitulasi Operasional (Pencarian Kolom Bertingkat)")
         self.root.geometry("1350x850") 
         self.root.configure(bg="#F4F5F7")
 
@@ -106,7 +106,7 @@ class BRIProSystem:
         
         info_frame = tk.Frame(header, bg=self.c_primary)
         info_frame.pack(side="right", padx=25, pady=15)
-        tk.Label(info_frame, text="Versi: Ekstraksi Dinamis (Unit Kerja & Kanca)", 
+        tk.Label(info_frame, text="Versi: Logika Prioritas Kolom (UKP > UKO > Kode UKO)", 
                  bg=self.c_primary, fg="#BDC3C7", font=("Segoe UI", 10)).pack(anchor="e")
 
         # --- Bagian Kontrol Input ---
@@ -174,7 +174,7 @@ class BRIProSystem:
         sy = ttk.Scrollbar(table_frame, orient="vertical")
         sx = ttk.Scrollbar(table_frame, orient="horizontal")
         
-        # PEMBARUAN KOLOM: Unit Kerja Pelaksana & Kanca
+        # DEFINISI KOLOM
         self.cols = ["Nomor Kasus", "Tipe Kasus", "Deskripsi", "Tanggal", "Unit Kerja Pelaksana", "Kanca", "Sumber Berkas"]
         self.tree = ttk.Treeview(table_frame, columns=self.cols, show="headings", 
                                  yscrollcommand=sy.set, xscrollcommand=sx.set)
@@ -416,8 +416,8 @@ class BRIProSystem:
 
     def extract_data_manual(self, raw_data, filename, filter_code):
         """
-        Logika Ekstraksi Data Manual dengan Pencarian Kolom Dinamis.
-        Mencari indeks kolom 'Unit Kerja Pelaksana' dan 'Kanca' secara otomatis.
+        Logika Ekstraksi Data Manual dengan Pencarian Kolom Dinamis & Bertingkat (Fallback).
+        Mekanisme: UKP -> UKO -> Kode UKO.
         """
         if not raw_data or len(raw_data) < 2:
             logging.warning("[-] Data hasil ekstraksi kosong atau hanya header.")
@@ -426,23 +426,36 @@ class BRIProSystem:
         header_row = raw_data[0]
         data_rows = raw_data[1:]
         
-        # PENCARIAN INDEKS KOLOM DINAMIS
-        # Mencari kolom berdasarkan kata kunci header
-        idx_uker = self.get_column_index(header_row, "Unit Kerja Pelaksana")
-        idx_kanca = self.get_column_index(header_row, "Kanca")
+        # --- PENCARIAN INDEKS KOLOM DINAMIS (LOGIKA BERTINGKAT) ---
         
-        # Fallback jika kolom Kanca tidak ditemukan, coba "Branch" atau "Cabang" (Opsional)
+        # 1. Cari Unit Kerja Pelaksana (Prioritas Utama)
+        idx_uker = self.get_column_index(header_row, "Unit Kerja Pelaksana")
+        
+        # 2. Jika tidak ketemu, cari Unit Kerja Operasional
+        if idx_uker == -1:
+            logging.info("[I] Unit Kerja Pelaksana tidak ditemukan. Mencari Unit Kerja Operasional...")
+            idx_uker = self.get_column_index(header_row, "Unit Kerja Operasional")
+            
+        # 3. Jika tidak ketemu, cari Kode UKO
+        if idx_uker == -1:
+            logging.info("[I] Unit Kerja Operasional tidak ditemukan. Mencari Kode UKO...")
+            idx_uker = self.get_column_index(header_row, "Kode UKO")
+
+        # 4. Cari Kolom Kanca (Untuk kolom tambahan)
+        idx_kanca = self.get_column_index(header_row, "Kanca")
+        # Opsional: Jika Kanca tidak ada, bisa cari "Branch" atau "Cabang" jika diperlukan
         if idx_kanca == -1:
              idx_kanca = self.get_column_index(header_row, "Cabang")
 
-        logging.info(f"[I] Pemetaan Kolom: Unit Kerja={idx_uker}, Kanca={idx_kanca}")
+        logging.info(f"[I] Hasil Pemetaan Kolom: Unit Kerja (Indeks={idx_uker}), Kanca (Indeks={idx_kanca})")
 
         regex_pattern = re.compile(filter_code, re.IGNORECASE)
         count_found = 0
 
         for row in data_rows:
-            # Pastikan baris memiliki cukup kolom untuk indeks yang dicari
-            max_idx = max(1, 4, 18, idx_uker, idx_kanca) # 18 adalah indeks lama (S), kita pakai sebagai batas aman
+            # Pastikan baris memiliki cukup kolom
+            # Kita cari indeks maksimum yang dibutuhkan untuk menghindari IndexOutOfRange
+            max_idx = max(1, 4, 18, idx_uker, idx_kanca) 
             if len(row) <= max_idx:
                 row = row + [None] * (max_idx - len(row) + 1)
 
@@ -459,8 +472,7 @@ class BRIProSystem:
                 val_d = self.normalize_val(row[3])  # Deskripsi
                 val_e = self.normalize_val(row[4])  # Tanggal
                 
-                # Ekstraksi Dinamis untuk Unit Kerja Pelaksana
-                # Jika kolom ditemukan gunakan nilainya, jika tidak kosongkan
+                # Ekstraksi Dinamis untuk Unit Kerja (Sesuai Prioritas yang ditemukan)
                 val_uker = self.normalize_val(row[idx_uker]) if idx_uker != -1 else ""
                 
                 # Ekstraksi Dinamis untuk Kanca
